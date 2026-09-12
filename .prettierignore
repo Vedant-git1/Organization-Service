@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+package-lock.json
+prisma/migrations
+# Canonical Resolve reference documentation (source-of-truth vendor material, not service-owned)
+Documentation

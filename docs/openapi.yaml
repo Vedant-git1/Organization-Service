@@ -1,0 +1,286 @@
+openapi: 3.0.3
+info:
+  title: Resolve Organization Service
+  version: 1.0.0
+  description: Public and internal organization APIs. Public APIs require access JWTs; internal APIs require service authentication.
+servers:
+  - url: http://localhost:3000
+paths:
+  /api/v1/organizations:
+    post:
+      summary: Create an organization
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      summary: List organizations
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - { name: name, in: query, schema: { type: string } }
+        - { name: slug, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OrganizationStatus' } }
+        - { name: sort, in: query, schema: { type: string, example: 'createdAt,desc' } }
+      responses:
+        '200':
+          description: Paginated organizations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationListResponse'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/organizations/{id}:
+    get:
+      summary: Get an organization
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      responses:
+        '200':
+          description: Organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Update organization profile
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateOrganizationRequest' }
+      responses:
+        '200':
+          description: Organization updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/SlugTaken' }
+  /api/v1/organizations/{id}/status:
+    patch:
+      summary: Update organization status
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/OrganizationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/OrganizationStatus' }
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/v1/organizations/{id}:
+    get:
+      summary: Internal organization lookup by ID
+      security: [{ internalServiceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/OrganizationId' }
+        - { $ref: '#/components/parameters/InternalService' }
+        - { $ref: '#/components/parameters/InternalTimestamp' }
+        - { $ref: '#/components/parameters/InternalSignature' }
+      responses:
+        '200':
+          description: Organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/v1/organizations/by-slug/{slug}:
+    get:
+      summary: Internal organization lookup by slug
+      security: [{ internalServiceAuth: [] }]
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$' }
+        - { $ref: '#/components/parameters/InternalService' }
+        - { $ref: '#/components/parameters/InternalTimestamp' }
+        - { $ref: '#/components/parameters/InternalSignature' }
+      responses:
+        '200':
+          description: Organization
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Organization' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    internalServiceAuth:
+      type: apiKey
+      in: header
+      name: x-internal-signature
+  parameters:
+    OrganizationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, maxLength: 255 }
+    InternalService:
+      name: x-internal-service
+      in: header
+      required: true
+      schema: { type: string, example: user-service }
+    InternalTimestamp:
+      name: x-internal-timestamp
+      in: header
+      required: true
+      schema: { type: string, example: '1700000000' }
+    InternalSignature:
+      name: x-internal-signature
+      in: header
+      required: true
+      schema: { type: string, example: hex-hmac-signature }
+  schemas:
+    OrganizationStatus:
+      type: string
+      enum: [ACTIVE, SUSPENDED]
+    Organization:
+      type: object
+      required: [id, name, slug, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid, example: 9d6c4d43-5c1d-4dd7-8d48-c63b5fb4c8d8 }
+        name: { type: string, maxLength: 255, example: Acme Bank }
+        slug:
+          {
+            type: string,
+            maxLength: 100,
+            pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+            example: acme-bank,
+          }
+        status: { $ref: '#/components/schemas/OrganizationStatus' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateOrganizationRequest:
+      type: object
+      required: [name, slug]
+      example: { name: Acme Bank, slug: acme-bank }
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        slug: { type: string, maxLength: 100 }
+    UpdateOrganizationRequest:
+      type: object
+      minProperties: 1
+      example: { name: Acme Bank International }
+      properties:
+        name: { type: string, minLength: 1, maxLength: 255 }
+        slug: { type: string, maxLength: 100 }
+    OrganizationListResponse:
+      type: object
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content:
+          type: array
+          items: { $ref: '#/components/schemas/Organization' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+  responses:
+    Conflict:
+      description: Slug or idempotency conflict
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Authorization failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Organization not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    SlugTaken:
+      description: Organization slug is already in use
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ErrorResponse:
+      type: object
+      required: [timestamp, status, code, message, path, requestId, traceId]
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        code: { type: string }
+        message: { type: string }
+        path: { type: string }
+        requestId: { type: string }
+        traceId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, code, message]
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
