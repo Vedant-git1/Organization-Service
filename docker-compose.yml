@@ -1,12 +1,26 @@
+# Local / integration stack for the Organization Service.
+#
+# This stack is a DEVELOPMENT configuration: it runs the service with the
+# documented development authentication fallbacks (HS256 access tokens and the
+# HMAC internal-service scheme) so that the complete HTTP surface can be
+# exercised end to end without the rest of the Resolve platform present.
+#
+# A PRODUCTION deployment must override the security values below with the
+# canonical Resolve mechanisms; `src/server.ts` refuses to start otherwise:
+#   NODE_ENV=production
+#   JWT_ALGORITHM=rs256            JWT_JWKS_URL=https://<auth-service>/.well-known/jwks.json
+#   INTERNAL_AUTH_MODE=service-jwt INTERNAL_JWT_JWKS_URL=https://<auth-service>/.well-known/jwks.json
+#   SYSTEM_ADMIN_USER_IDS=...      (until the canonical RBAC contract is integrated)
+# Secrets must come from the deployment secret manager, never from this file.
 services:
   mysql:
     image: mysql:8.4
     container_name: resolve-organization-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: resolve_organization
-      MYSQL_USER: resolve_user
-      MYSQL_PASSWORD: resolve_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-resolve_organization}
+      MYSQL_USER: ${MYSQL_USER:-resolve_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-resolve_password}
     ports:
       - '3307:3306'
     volumes:
@@ -37,17 +51,22 @@ services:
       dockerfile: Dockerfile
     container_name: resolve-organization-app
     environment:
-      NODE_ENV: production
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: 3000
       SERVICE_NAME: organization-service
-      DATABASE_URL: mysql://resolve_user:resolve_password@mysql:3306/resolve_organization
+      DATABASE_URL: mysql://${MYSQL_USER:-resolve_user}:${MYSQL_PASSWORD:-resolve_password}@mysql:3306/${MYSQL_DATABASE:-resolve_organization}
       REDIS_URL: redis://redis:6379
-      LOG_LEVEL: info
-      JWT_SECRET: replace-with-at-least-32-character-development-secret
-      JWT_ISSUER: resolve-authentication
-      INTERNAL_AUTH_SECRET: replace-with-at-least-32-character-internal-secret
-      INTERNAL_ALLOWED_SERVICES: authentication-service,user-service
-      SYSTEM_ADMIN_USER_IDS: system-admin
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-hs256}
+      JWT_SECRET: ${JWT_SECRET:-local-development-jwt-secret-that-is-at-least-32-characters}
+      JWT_ISSUER: ${JWT_ISSUER:-resolve-authentication-service}
+      JWT_JWKS_URL: ${JWT_JWKS_URL:-}
+      INTERNAL_AUTH_MODE: ${INTERNAL_AUTH_MODE:-hmac}
+      INTERNAL_AUTH_SECRET: ${INTERNAL_AUTH_SECRET:-local-development-internal-secret-at-least-32-chars}
+      INTERNAL_JWT_ISSUER: ${INTERNAL_JWT_ISSUER:-resolve-authentication-service}
+      INTERNAL_JWT_JWKS_URL: ${INTERNAL_JWT_JWKS_URL:-}
+      INTERNAL_ALLOWED_SERVICES: ${INTERNAL_ALLOWED_SERVICES:-authentication-service,user-service}
+      SYSTEM_ADMIN_USER_IDS: ${SYSTEM_ADMIN_USER_IDS:-system-admin}
     ports:
       - '3000:3000'
     depends_on:
@@ -55,6 +74,19 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
 
 volumes:
   mysql-data:

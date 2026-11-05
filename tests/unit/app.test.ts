@@ -92,3 +92,25 @@ describe('application health endpoints', () => {
     expect(response.body.message).not.toContain('stack');
   });
 });
+
+describe('API documentation', () => {
+  it('serves the OpenAPI contract and Swagger UI', async () => {
+    const app = createApp(config, {
+      checkDatabase: async () => undefined,
+      checkRedis: async () => undefined,
+    });
+
+    const contractResponse = await request(app).get('/docs/openapi.yaml');
+    const uiResponse = await request(app).get('/docs/');
+    const configResponse = await request(app).get('/docs/swagger-ui-init.js');
+
+    expect(contractResponse.status).toBe(200);
+    expect(contractResponse.headers['content-type']).toContain('yaml');
+    expect(contractResponse.text).toContain('openapi: 3.0.3');
+    expect(contractResponse.text).toContain('/api/v1/organizations');
+    expect(uiResponse.status).toBe(200);
+    expect(uiResponse.text).toContain('Resolve Organization Service API');
+    expect(configResponse.status).toBe(200);
+    expect(configResponse.text).toContain('/docs/openapi.yaml');
+  });
+});

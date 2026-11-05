@@ -74,6 +74,36 @@ interface CanonicalErrorResponse {
  * Internal details (SQL, Prisma, Redis, stack traces, secrets) are never
  * serialized.
  */
+/**
+ * Minimum set of Prisma codes that mean "the database could not be reached or
+ * the connection failed" as opposed to a constraint/business failure:
+ * P1000 auth failed, P1001 cannot reach, P1002 timed out, P1003 database does
+ * not exist, P1008 operation timed out, P1010 access denied, P1017 connection
+ * closed. These map to the documented `503` behavior
+ * (`Documentation/Schemas/03_Organization_Service_Schema.md` §31:
+ * "Organization DB unavailable → 503") instead of a bare `500`.
+ */
+const dependencyErrorCodes = new Set([
+  'P1000',
+  'P1001',
+  'P1002',
+  'P1003',
+  'P1008',
+  'P1010',
+  'P1017',
+]);
+
+/** Duck-typed so app-level handling never depends on Prisma's class hierarchy. */
+function isDependencyError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; name?: unknown };
+  if (typeof candidate.code === 'string' && dependencyErrorCodes.has(candidate.code)) return true;
+  return (
+    candidate.name === 'PrismaClientInitializationError' ||
+    candidate.name === 'PrismaClientRustPanicError'
+  );
+}
+
 export function errorHandler(
   error: unknown,
   request: Request,
@@ -142,6 +172,19 @@ export function errorHandler(
     response
       .status(400)
       .json(errorResponse(400, 'ORG_VALIDATION_ERROR', 'Request body contains invalid JSON'));
+    return;
+  }
+
+  if (isDependencyError(error)) {
+    request.log.error(
+      { requestId, traceId, path, status: 503, errorCode: 'ORG_DEPENDENCY_UNAVAILABLE' },
+      'A required dependency is unavailable',
+    );
+    response
+      .status(503)
+      .json(
+        errorResponse(503, 'ORG_DEPENDENCY_UNAVAILABLE', 'A required dependency is unavailable'),
+      );
     return;
   }
 

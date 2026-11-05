@@ -1,6 +1,19 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+/**
+ * An optional environment value where an empty string means "not set".
+ * Compose and `.env` files routinely forward an unpopulated override as `''`;
+ * treating that as absent keeps configuration validation meaningful.
+ */
+function optionalValue<T extends z.ZodTypeAny>(schema: T) {
+  return z
+    .string()
+    .optional()
+    .transform((value) => (value === undefined || value.trim() === '' ? undefined : value))
+    .pipe(schema.optional());
+}
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -17,11 +30,10 @@ const environmentSchema = z.object({
   JWT_ALGORITHM: z.enum(['hs256', 'rs256']).default('hs256'),
   JWT_SECRET: z.string().min(32).optional(),
   JWT_ISSUER: z.string().min(1).default('resolve-authentication-service'),
-  JWT_JWKS_URL: z.string().url('JWT_JWKS_URL must be a valid URL').optional(),
-  JWT_AUDIENCE: z
-    .string()
-    .optional()
-    .transform((value) => (value === undefined || value.trim() === '' ? undefined : value)),
+  // Empty values are treated as unset so `.env.example`/Compose can forward an
+  // unpopulated override without failing configuration validation.
+  JWT_JWKS_URL: optionalValue(z.string().url('JWT_JWKS_URL must be a valid URL')),
+  JWT_AUDIENCE: optionalValue(z.string().min(1)),
   // Internal (service-to-service) authentication.
   // Canonical: mTLS client cert or a signed service-to-service JWT carrying a
   // `service` claim. `service-jwt` is the canonical mechanism; `hmac` is the
@@ -29,7 +41,7 @@ const environmentSchema = z.object({
   INTERNAL_AUTH_MODE: z.enum(['hmac', 'service-jwt']).default('hmac'),
   INTERNAL_AUTH_SECRET: z.string().min(32).optional(),
   INTERNAL_JWT_ISSUER: z.string().min(1).default('resolve-authentication-service'),
-  INTERNAL_JWT_JWKS_URL: z.string().url('INTERNAL_JWT_JWKS_URL must be a valid URL').optional(),
+  INTERNAL_JWT_JWKS_URL: optionalValue(z.string().url('INTERNAL_JWT_JWKS_URL must be a valid URL')),
   INTERNAL_ALLOWED_SERVICES: z
     .string()
     .default('authentication-service,user-service')

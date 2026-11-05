@@ -370,7 +370,7 @@ describe('internal service authentication (canonical signed service JWT)', () =>
 });
 
 describe('Redis idempotency contract', () => {
-  it('replays the same result, rejects different input, and serializes concurrent work', async () => {
+  it('replays the same result and treats concurrent identical requests as one operation', async () => {
     const store = createMemoryIdempotencyStore();
     let calls = 0;
     const operation = async () => {
@@ -381,15 +381,48 @@ describe('Redis idempotency contract', () => {
 
     const first = await store.execute('key-1', { name: 'Acme' }, operation);
     const retry = await store.execute('key-1', { name: 'Acme' }, operation);
-    const concurrent = await Promise.allSettled([
+    const concurrent = await Promise.all([
       store.execute('key-2', { name: 'Acme' }, operation),
       store.execute('key-2', { name: 'Acme' }, operation),
     ]);
     const different = store.execute('key-1', { name: 'Other' }, operation);
 
     expect(first).toEqual(retry);
+    // key-1 once + key-2 once — the duplicate request never repeats the work.
     expect(calls).toBe(2);
-    expect(concurrent.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(concurrent[0]).toEqual(concurrent[1]);
+    expect(concurrent[0]).toEqual({ statusCode: 201, body: { id: 'organization-1' } });
     await expect(different).rejects.toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
+  });
+
+  it('does not treat the same body with different key order as a different request', async () => {
+    const store = createMemoryIdempotencyStore();
+    const first = await store.execute('key-order', { name: 'Acme', slug: 'acme' }, async () => ({
+      statusCode: 201,
+      body: { id: 'organization-1' },
+    }));
+    const reordered = await store.execute(
+      'key-order',
+      { slug: 'acme', name: 'Acme' },
+      async () => ({ statusCode: 201, body: { id: 'organization-1' } }),
+    );
+
+    expect(reordered).toEqual(first);
+  });
+
+  it('reports a stalled in-flight request as a defined conflict instead of duplicating work', async () => {
+    const store = createMemoryIdempotencyStore({ pendingWaitTimeoutMs: 20 });
+    const neverFinishes = () => new Promise<never>(() => {});
+
+    const inFlight = store.execute('stalled-key', { name: 'Acme' }, neverFinishes);
+    inFlight.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await expect(
+      store.execute('stalled-key', { name: 'Acme' }, async () => ({
+        statusCode: 201,
+        body: { id: 'organization-1' },
+      })),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'IDEMPOTENCY_REQUEST_IN_PROGRESS' });
   });
 });

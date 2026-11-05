@@ -1,9 +1,6 @@
 import { Router } from 'express';
 import type { OrganizationRepository } from './organization.repository.js';
-import {
-  createOrganizationController,
-  createSecuredOrganizationController,
-} from './organization.controller.js';
+import { createOrganizationController } from './organization.controller.js';
 import {
   createOrganizationRequestSchema,
   listOrganizationsQuerySchema,
@@ -20,6 +17,14 @@ import { requireSystemAdministrator } from '../../middleware/authorization.js';
 import { requireIdempotencyKey } from '../../middleware/idempotency.js';
 import type { IdempotencyStore } from '../../infrastructure/redis/idempotency.js';
 
+/**
+ * Public organization routes.
+ *
+ * Authorization is enforced twice, deliberately: `requireSystemAdministrator`
+ * keeps the canonical 403 precedence ahead of body validation, and
+ * `OrganizationService` itself re-checks every operation so the boundary cannot
+ * be bypassed by a future endpoint that forgets the middleware.
+ */
 export function createOrganizationRouter(
   repository: OrganizationRepository,
   verifier: JwtVerifier,
@@ -27,14 +32,8 @@ export function createOrganizationRouter(
   idempotency: IdempotencyStore,
 ): Router {
   const router = Router();
-  // One service instance shared by both controller variants (DI cleanup).
-  const service = new OrganizationService(repository);
-  const controller = createOrganizationController(service);
-  const securedController = createSecuredOrganizationController(
-    service,
-    authorization,
-    idempotency,
-  );
+  const service = new OrganizationService(repository, authorization);
+  const controller = createOrganizationController(service, idempotency);
   const authenticated = authenticate(verifier);
 
   router.post(
@@ -43,7 +42,7 @@ export function createOrganizationRouter(
     requireSystemAdministrator(authorization),
     requireIdempotencyKey,
     validateRequest('body', createOrganizationRequestSchema),
-    securedController.create,
+    controller.create,
   );
   router.get(
     '/',
@@ -52,11 +51,13 @@ export function createOrganizationRouter(
     validateRequest('query', listOrganizationsQuerySchema),
     controller.list,
   );
+  // System Administrator, or a caller whose JWT `tenantId` equals `:id`
+  // (Organization contract §1 authorization model and §2.2).
   router.get(
     '/:id',
     authenticated,
     validateRequest('params', organizationIdParamsSchema),
-    securedController.get,
+    controller.get,
   );
   router.patch(
     '/:id/status',
@@ -66,8 +67,6 @@ export function createOrganizationRouter(
     validateRequest('body', updateOrganizationStatusRequestSchema, 'ORG_INVALID_STATUS'),
     controller.updateStatus,
   );
-  // System Administrator only (Organization contract §1 authorization model
-  // and §3.2): only GET /{id} additionally accepts an org member.
   router.patch(
     '/:id',
     authenticated,

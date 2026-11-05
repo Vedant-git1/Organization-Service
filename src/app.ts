@@ -1,5 +1,8 @@
 import express, { type Express } from 'express';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import pinoHttp from 'pino-http';
+import swaggerUi from 'swagger-ui-express';
 import type { AppConfig } from './config/env.js';
 import {
   createHealthRouter,
@@ -23,6 +26,8 @@ import {
 } from './infrastructure/redis/idempotency.js';
 import { AppError } from './shared/errors.js';
 import { securityHeaders } from './middleware/security-headers.js';
+
+const openApiDocument = readFileSync(path.resolve(process.cwd(), 'docs/openapi.yaml'), 'utf8');
 
 export interface AppDependencies extends HealthDependencies {
   organizationRepository?: OrganizationRepository;
@@ -81,6 +86,17 @@ export function createApp(config: AppConfig, dependencies: AppDependencies): Exp
     }),
   );
   app.use(express.json());
+  app.get('/docs/openapi.yaml', (_request, response) => {
+    response.type('yaml').send(openApiDocument);
+  });
+  app.use(
+    '/docs',
+    swaggerUi.serve,
+    swaggerUi.setup(undefined, {
+      customSiteTitle: 'Resolve Organization Service API',
+      swaggerOptions: { url: '/docs/openapi.yaml' },
+    }),
+  );
   app.use(createHealthRouter(config, dependencies));
   app.use(
     '/api/v1/organizations',

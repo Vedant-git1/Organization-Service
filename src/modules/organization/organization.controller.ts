@@ -1,7 +1,7 @@
 import type { RequestHandler } from 'express';
 import type { OrganizationService } from './organization.service.js';
 import type { Organization } from './organization.types.js';
-import type { AuthorizationService } from '../../security/auth.types.js';
+import type { AuthContext } from '../../security/auth.types.js';
 import type { IdempotencyStore } from '../../infrastructure/redis/idempotency.js';
 import type {
   CreateOrganizationRequest,
@@ -20,42 +20,47 @@ function toResponse(organization: Organization) {
 }
 
 /**
- * Internal lookups return the canonical summary shape `{ id, name, slug,
- * status }` (Organization contract §3.3/§3.4, Authentication contract §14.0).
+ * Public organization endpoints.
+ *
+ * Every handler passes the verified caller context into `OrganizationService`,
+ * which owns the System Administrator / tenant-membership authorization
+ * boundary — controllers never decide access themselves.
+ * `create` additionally wraps the operation in Redis-backed idempotency: the
+ * same key with the same body replays the original response; the same key with
+ * a different body is a 409 IDEMPOTENCY_KEY_REUSED.
  */
-function toInternalResponse(organization: Organization) {
-  return {
-    id: organization.id,
-    name: organization.name,
-    slug: organization.slug,
-    status: organization.status,
-  };
-}
-
-export function createOrganizationController(service: OrganizationService): {
+export function createOrganizationController(
+  service: OrganizationService,
+  idempotency: IdempotencyStore,
+): {
   create: RequestHandler;
   get: RequestHandler;
   list: RequestHandler;
   update: RequestHandler;
   updateStatus: RequestHandler;
-  internalGet: RequestHandler;
-  internalGetBySlug: RequestHandler;
 } {
+  const actor = (response: { locals: Record<string, unknown> }): AuthContext =>
+    response.locals.auth as AuthContext;
+
   return {
     create: async (_request, response) => {
-      const organization = await service.createOrganization(
-        response.locals.validated.body as CreateOrganizationRequest,
-      );
-      response.status(201).json(toResponse(organization));
+      const input = response.locals.validated.body as CreateOrganizationRequest;
+      const key = response.locals.idempotencyKey as string;
+      const result = await idempotency.execute(key, input, async () => {
+        const organization = await service.createOrganization(input, actor(response));
+        return { statusCode: 201, body: toResponse(organization) };
+      });
+      response.status(result.statusCode).json(result.body);
     },
     get: async (_request, response) => {
       const { id } = response.locals.validated.params as OrganizationIdParams;
-      const organization = await service.getOrganization(id);
+      const organization = await service.getOrganization(id, actor(response));
       response.status(200).json(toResponse(organization));
     },
     list: async (_request, response) => {
       const result = await service.listOrganizations(
         response.locals.validated.query as ListOrganizationsQuery,
+        actor(response),
       );
       // Canonical pagination response (Organization contract §1):
       // { content, page, size, totalElements, totalPages }.
@@ -72,61 +77,14 @@ export function createOrganizationController(service: OrganizationService): {
       const organization = await service.updateOrganization(
         id,
         response.locals.validated.body as UpdateOrganizationRequest,
+        actor(response),
       );
       response.status(200).json(toResponse(organization));
     },
     updateStatus: async (_request, response) => {
       const { id } = response.locals.validated.params as OrganizationIdParams;
       const { status } = response.locals.validated.body as UpdateOrganizationStatusRequest;
-      const organization = await service.updateOrganizationStatus(id, status);
-      response.status(200).json(toResponse(organization));
-    },
-    internalGet: async (_request, response) => {
-      const { id } = response.locals.validated.params as OrganizationIdParams;
-      const organization = await service.getOrganization(id);
-      response.status(200).json(toInternalResponse(organization));
-    },
-    internalGetBySlug: async (_request, response) => {
-      const { slug } = response.locals.validated.params as { slug: string };
-      const organization = await service.getOrganizationBySlug(slug);
-      response.status(200).json(toInternalResponse(organization));
-    },
-  };
-}
-
-/**
- * Controller variants that add the tenant-aware authorization boundary:
- * - `get` — System Administrator or member of the requested organization
- *   (Organization contract §2.2). Non-members receive 403 ORG_FORBIDDEN.
- * - `create` — Redis-backed idempotency (same key + same body replays the
- *   original result; same key + different body → 409 IDEMPOTENCY_KEY_REUSED).
- * All other administrative operations are gated at the router layer by
- * `requireSystemAdministrator`.
- */
-export function createSecuredOrganizationController(
-  service: OrganizationService,
-  authorization: AuthorizationService,
-  idempotency: IdempotencyStore,
-): ReturnType<typeof createOrganizationController> {
-  const plain = createOrganizationController(service);
-  return {
-    ...plain,
-    create: async (_request, response) => {
-      const input = response.locals.validated.body as CreateOrganizationRequest;
-      const key = response.locals.idempotencyKey as string;
-      const result = await idempotency.execute(key, input, async () => {
-        const organization = await service.createOrganization(input);
-        return { statusCode: 201, body: toResponse(organization) };
-      });
-      response.status(result.statusCode).json(result.body);
-    },
-    get: async (_request, response) => {
-      const { id } = response.locals.validated.params as OrganizationIdParams;
-      const organization = await service.getOrganizationForActor(
-        id,
-        response.locals.auth,
-        authorization,
-      );
+      const organization = await service.updateOrganizationStatus(id, status, actor(response));
       response.status(200).json(toResponse(organization));
     },
   };

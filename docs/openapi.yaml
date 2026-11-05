@@ -6,6 +6,32 @@ info:
 servers:
   - url: http://localhost:3000
 paths:
+  /health:
+    get:
+      summary: Check process health
+      responses:
+        '200':
+          description: Process is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /health/ready:
+    get:
+      summary: Check dependency readiness
+      responses:
+        '200':
+          description: Required dependencies are available
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: One or more required dependencies are unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
   /api/v1/organizations:
     post:
       summary: Create an organization
@@ -28,16 +54,40 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     get:
       summary: List organizations
       security: [{ bearerAuth: [] }]
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
-        - { name: name, in: query, schema: { type: string } }
-        - { name: slug, in: query, schema: { type: string } }
+        - {
+            name: name,
+            in: query,
+            description: Case-insensitive substring match on the display name.,
+            schema: { type: string },
+          }
+        - {
+            name: slug,
+            in: query,
+            description: Substring match on the slug.,
+            schema: { type: string },
+          }
         - { name: status, in: query, schema: { $ref: '#/components/schemas/OrganizationStatus' } }
-        - { name: sort, in: query, schema: { type: string, example: 'createdAt,desc' } }
+        - name: sort
+          in: query
+          description: >-
+            Canonical sorting syntax `field,direction`; the legacy `field:direction`
+            form is also accepted. Supported fields are name, slug, status,
+            createdAt, and updatedAt.
+          schema:
+            {
+              type: string,
+              pattern: '^(name|slug|status|createdAt|updatedAt)[,:](asc|desc)$',
+              default: 'createdAt,desc',
+              example: 'createdAt,desc',
+            }
       responses:
         '200':
           description: Paginated organizations
@@ -45,8 +95,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OrganizationListResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /api/v1/organizations/{id}:
     get:
       summary: Get an organization
@@ -62,6 +114,8 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     patch:
       summary: Update organization profile
       security: [{ bearerAuth: [] }]
@@ -82,6 +136,8 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/SlugTaken' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /api/v1/organizations/{id}/status:
     patch:
       summary: Update organization status
@@ -106,10 +162,17 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/ServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /internal/v1/organizations/{id}:
     get:
       summary: Internal organization lookup by ID
-      security: [{ internalServiceAuth: [] }]
+      description: >-
+        Service-to-service lookup used by other Resolve services to validate a
+        tenant before writing tenant-owned data. Never exposed through the public
+        gateway. The caller's forwarded end-user token is not accepted as service
+        identity.
+      security: [{ internalServiceJwt: [] }, { internalServiceAuth: [] }]
       parameters:
         - { $ref: '#/components/parameters/OrganizationId' }
         - { $ref: '#/components/parameters/InternalService' }
@@ -117,17 +180,23 @@ paths:
         - { $ref: '#/components/parameters/InternalSignature' }
       responses:
         '200':
-          description: Organization
+          description: Organization summary
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Organization' }
+              schema: { $ref: '#/components/schemas/OrganizationSummary' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
   /internal/v1/organizations/by-slug/{slug}:
     get:
       summary: Internal organization lookup by slug
-      security: [{ internalServiceAuth: [] }]
+      description: >-
+        The single place an organization slug is resolved (for example by the
+        Authentication Service during login). A `SUSPENDED` tenant is returned
+        with `status: SUSPENDED` so the caller can apply its own rejection
+        policy rather than treating it as not found.
+      security: [{ internalServiceJwt: [] }, { internalServiceAuth: [] }]
       parameters:
         - name: slug
           in: path
@@ -138,12 +207,14 @@ paths:
         - { $ref: '#/components/parameters/InternalSignature' }
       responses:
         '200':
-          description: Organization
+          description: Organization summary
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Organization' }
+              schema: { $ref: '#/components/schemas/OrganizationSummary' }
+        '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 components:
   securitySchemes:
     bearerAuth:
@@ -154,6 +225,17 @@ components:
       type: apiKey
       in: header
       name: x-internal-signature
+      description: >-
+        Development-only HMAC request signing (refused when NODE_ENV=production).
+        Requires x-internal-service, x-internal-timestamp, and x-internal-signature.
+    internalServiceJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Canonical service-to-service authentication: a signed service JWT
+        (`type: "service"`, `service` claim) verified against the platform JWKS,
+        or mTLS client-certificate identity terminated at the mesh layer.
   parameters:
     OrganizationId:
       name: id
@@ -163,7 +245,8 @@ components:
     Page:
       name: page
       in: query
-      schema: { type: integer, minimum: 1, default: 1 }
+      description: Zero-based page index (canonical pagination contract).
+      schema: { type: integer, minimum: 0, default: 0 }
     Size:
       name: size
       in: query
@@ -172,23 +255,59 @@ components:
       name: Idempotency-Key
       in: header
       required: true
+      description: >-
+        Required on organization creation. A retry with the same key and the same
+        body replays the original response verbatim (`201`); the same key with a
+        different body is rejected with `409 IDEMPOTENCY_KEY_REUSED`. Replay
+        records are stored in Redis under `idempotency:{key}` for 24 hours.
       schema: { type: string, maxLength: 255 }
     InternalService:
       name: x-internal-service
       in: header
-      required: true
+      required: false
+      description: >-
+        Development HMAC scheme only. Identifies the calling service; it must be
+        present in `INTERNAL_ALLOWED_SERVICES`.
       schema: { type: string, example: user-service }
     InternalTimestamp:
       name: x-internal-timestamp
       in: header
-      required: true
+      required: false
+      description: >-
+        Development HMAC scheme only. Unix seconds; requests outside the
+        configured clock-skew window are rejected, and an identical replayed
+        request is rejected.
       schema: { type: string, example: '1700000000' }
     InternalSignature:
       name: x-internal-signature
       in: header
-      required: true
+      required: false
+      description: >-
+        Development HMAC scheme only. HMAC-SHA256 of
+        `{service}:{timestamp}:{METHOD}:{path}`, hex encoded.
       schema: { type: string, example: hex-hmac-signature }
   schemas:
+    HealthResponse:
+      type: object
+      required: [status, service, timestamp, requestId]
+      properties:
+        status: { type: string, enum: [ok] }
+        service: { type: string }
+        timestamp: { type: string, format: date-time }
+        requestId: { type: string }
+    ReadinessResponse:
+      type: object
+      required: [status, service, checks, requestId]
+      properties:
+        status: { type: string, enum: [ready, not_ready] }
+        service: { type: string }
+        checks:
+          type: object
+          required: [database, redis]
+          properties:
+            database: { type: string, enum: [up, down] }
+            redis: { type: string, enum: [up, down] }
+        requestId: { type: string }
     OrganizationStatus:
       type: string
       enum: [ACTIVE, SUSPENDED]
@@ -208,6 +327,40 @@ components:
         status: { $ref: '#/components/schemas/OrganizationStatus' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    OrganizationSummary:
+      type: object
+      description: >-
+        Canonical internal representation returned by the service-to-service
+        lookup endpoints (`{ id, name, slug, status }`).
+      required: [id, name, slug, status]
+      properties:
+        id: { type: string, format: uuid, example: 9d6c4d43-5c1d-4dd7-8d48-c63b5fb4c8d8 }
+        name: { type: string, maxLength: 255, example: Acme Bank }
+        slug: { type: string, maxLength: 100, example: acme-bank }
+        status: { $ref: '#/components/schemas/OrganizationStatus' }
+    ErrorResponse:
+      type: object
+      description: >-
+        Canonical error shape. `errors[]` is present only on 400 field-validation
+        failures. Stack traces, SQL, Redis, and secret material are never included.
+      required: [timestamp, status, code, message, path, requestId, traceId]
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        code: { type: string, example: ORG_NOT_FOUND }
+        message: { type: string }
+        path: { type: string }
+        requestId: { type: string }
+        traceId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, code, message]
+            properties:
+              field: { type: string }
+              code: { type: string }
+              message: { type: string }
     CreateOrganizationRequest:
       type: object
       required: [name, slug]
@@ -264,23 +417,15 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
-    ErrorResponse:
-      type: object
-      required: [timestamp, status, code, message, path, requestId, traceId]
-      properties:
-        timestamp: { type: string, format: date-time }
-        status: { type: integer }
-        code: { type: string }
-        message: { type: string }
-        path: { type: string }
-        requestId: { type: string }
-        traceId: { type: string }
-        errors:
-          type: array
-          items:
-            type: object
-            required: [field, code, message]
-            properties:
-              field: { type: string }
-              code: { type: string }
-              message: { type: string }
+    ServiceUnavailable:
+      description: >-
+        A required dependency (MySQL or Redis) is unavailable. Returned as
+        `ORG_DEPENDENCY_UNAVAILABLE`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    ServerError:
+      description: Unexpected server error. No stack trace or internal detail is exposed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
